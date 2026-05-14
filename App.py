@@ -1,6 +1,7 @@
 import streamlit as st
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
+# from spotipy.oauth2 import SpotifyOAuth
+from spotipy.oauth2 import SpotifyClientCredentials
 import pandas as pd
 import os
 import re
@@ -20,15 +21,41 @@ CSV_FILE_PATH = "my_anison_data.csv"
 # 2. 関数定義
 # ==========================================
 @st.cache_data
+# def fetch_spotify_playlist():
+#     auth_manager = SpotifyOAuth(
+#         client_id=SPOTIPY_CLIENT_ID,
+#         client_secret=SPOTIPY_CLIENT_SECRET,
+#         redirect_uri=SPOTIPY_REDIRECT_URI,
+#         scope="playlist-read-private"
+#     )
+#     sp = spotipy.Spotify(auth_manager=auth_manager)
+#     results = sp.playlist_tracks(PLAYLIST_ID)
+#     tracks = results["items"]
+#     while results["next"]:
+#         results = sp.next(results)
+#         tracks.extend(results["items"])
+    
+#     data = []
+#     for item in tracks:
+#         track_data = item.get("track") or item.get("item")
+#         if not track_data or not track_data.get("name"): continue
+#         artists = track_data.get("artists", [])
+#         data.append({
+#             "曲名": track_data["name"],
+#             "アーティスト": artists[0]["name"] if artists else "不明"
+#         })
+#     return pd.DataFrame(data)
+
 def fetch_spotify_playlist():
-    auth_manager = SpotifyOAuth(
+    # 🌟ログイン画面を出さずに直接サーバー間通信をするモードに変更
+    auth_manager = SpotifyClientCredentials(
         client_id=SPOTIPY_CLIENT_ID,
-        client_secret=SPOTIPY_CLIENT_SECRET,
-        redirect_uri=SPOTIPY_REDIRECT_URI,
-        scope="playlist-read-private"
+        client_secret=SPOTIPY_CLIENT_SECRET
     )
     sp = spotipy.Spotify(auth_manager=auth_manager)
     results = sp.playlist_tracks(PLAYLIST_ID)
+    
+    # 以下の処理は今までと同じです
     tracks = results["items"]
     while results["next"]:
         results = sp.next(results)
@@ -44,6 +71,7 @@ def fetch_spotify_playlist():
             "アーティスト": artists[0]["name"] if artists else "不明"
         })
     return pd.DataFrame(data)
+
 
 def get_session_columns(df):
     cols = [c for c in df.columns if "回目" in c]
