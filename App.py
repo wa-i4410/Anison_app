@@ -1,13 +1,14 @@
 import streamlit as st
 import spotipy
-# from spotipy.oauth2 import SpotifyOAuth
-from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler, CacheFileHandler # 🌟追加
 import pandas as pd
 import os
 import re
+import json # 🌟追加
 
 # ==========================================
-# 1. 設定（st.secretsから安全に読み込む）
+# 1. 設定
 # ==========================================
 SPOTIPY_CLIENT_ID = st.secrets["SPOTIPY_CLIENT_ID"]
 SPOTIPY_CLIENT_SECRET = st.secrets["SPOTIPY_CLIENT_SECRET"]
@@ -21,41 +22,27 @@ CSV_FILE_PATH = "my_anison_data.csv"
 # 2. 関数定義
 # ==========================================
 @st.cache_data
-# def fetch_spotify_playlist():
-#     auth_manager = SpotifyOAuth(
-#         client_id=SPOTIPY_CLIENT_ID,
-#         client_secret=SPOTIPY_CLIENT_SECRET,
-#         redirect_uri=SPOTIPY_REDIRECT_URI,
-#         scope="playlist-read-private"
-#     )
-#     sp = spotipy.Spotify(auth_manager=auth_manager)
-#     results = sp.playlist_tracks(PLAYLIST_ID)
-#     tracks = results["items"]
-#     while results["next"]:
-#         results = sp.next(results)
-#         tracks.extend(results["items"])
-    
-#     data = []
-#     for item in tracks:
-#         track_data = item.get("track") or item.get("item")
-#         if not track_data or not track_data.get("name"): continue
-#         artists = track_data.get("artists", [])
-#         data.append({
-#             "曲名": track_data["name"],
-#             "アーティスト": artists[0]["name"] if artists else "不明"
-#         })
-#     return pd.DataFrame(data)
-
 def fetch_spotify_playlist():
-    # 🌟ログイン画面を出さずに直接サーバー間通信をするモードに変更
-    auth_manager = SpotifyClientCredentials(
+    # 🌟 クラウド環境（Secretsにチケットがある）か、ローカルかを自動判別
+    if "SPOTIFY_CACHE" in st.secrets:
+        # クラウド用：Secretsから直接チケットを読み込む（ブラウザ不要）
+        token_info = json.loads(st.secrets["SPOTIFY_CACHE"])
+        cache_handler = MemoryCacheHandler(token_info=token_info)
+    else:
+        # ローカル用：いままで通り .cache ファイルを使う
+        cache_handler = CacheFileHandler(cache_path=".cache")
+
+    auth_manager = SpotifyOAuth(
         client_id=SPOTIPY_CLIENT_ID,
-        client_secret=SPOTIPY_CLIENT_SECRET
+        client_secret=SPOTIPY_CLIENT_SECRET,
+        redirect_uri=SPOTIPY_REDIRECT_URI,
+        scope="playlist-read-private",
+        cache_handler=cache_handler,
+        open_browser=False
     )
     sp = spotipy.Spotify(auth_manager=auth_manager)
     results = sp.playlist_tracks(PLAYLIST_ID)
     
-    # 以下の処理は今までと同じです
     tracks = results["items"]
     while results["next"]:
         results = sp.next(results)
