@@ -1,35 +1,34 @@
 import streamlit as st
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-from spotipy.cache_handler import MemoryCacheHandler, CacheFileHandler # 🌟追加
+from spotipy.cache_handler import MemoryCacheHandler, CacheFileHandler
+from streamlit_gsheets import GSheetsConnection # 🌟追加
 import pandas as pd
 import os
 import re
-import json # 🌟追加
+import json
 
 # ==========================================
-# 1. 設定
+# 1. 設定（st.secretsから安全に読み込む）
 # ==========================================
 SPOTIPY_CLIENT_ID = st.secrets["SPOTIPY_CLIENT_ID"]
 SPOTIPY_CLIENT_SECRET = st.secrets["SPOTIPY_CLIENT_SECRET"]
 SPOTIPY_REDIRECT_URI = st.secrets["SPOTIPY_REDIRECT_URI"]
 ADMIN_PASS = st.secrets["ADMIN_PASS"]
-
 PLAYLIST_ID = "4eMAdiJodicdywba8pZ0DU"
-CSV_FILE_PATH = "my_anison_data.csv"
+
+# 🌟 Googleスプレッドシートへの接続を確立
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 # ==========================================
 # 2. 関数定義
 # ==========================================
 @st.cache_data
 def fetch_spotify_playlist():
-    # 🌟 クラウド環境（Secretsにチケットがある）か、ローカルかを自動判別
     if "SPOTIFY_CACHE" in st.secrets:
-        # クラウド用：Secretsから直接チケットを読み込む（ブラウザ不要）
         token_info = json.loads(st.secrets["SPOTIFY_CACHE"])
         cache_handler = MemoryCacheHandler(token_info=token_info)
     else:
-        # ローカル用：いままで通り .cache ファイルを使う
         cache_handler = CacheFileHandler(cache_path=".cache")
 
     auth_manager = SpotifyOAuth(
@@ -42,7 +41,6 @@ def fetch_spotify_playlist():
     )
     sp = spotipy.Spotify(auth_manager=auth_manager)
     results = sp.playlist_tracks(PLAYLIST_ID)
-    
     tracks = results["items"]
     while results["next"]:
         results = sp.next(results)
@@ -59,23 +57,29 @@ def fetch_spotify_playlist():
         })
     return pd.DataFrame(data)
 
-
 def get_session_columns(df):
     cols = [c for c in df.columns if "回目" in c]
     return sorted(cols, key=lambda x: int(re.search(r'\d+', x).group()))
 
+# 🌟 スプレッドシートからデータを安全に読み込む関数
+def load_data_from_sheets():
+    # ttl=0 にすることでキャッシュを無効化し、常に最新のデータをスプレッドシートから取得する
+    return conn.read(worksheet="Sheet1", ttl=0)
+
+# 🌟 スプレッドシートへデータを保存する関数
+def save_data_to_sheets(df):
+    conn.update(worksheet="Sheet1", data=df)
+    st.cache_data.clear() # アプリ内の古いキャッシュをクリア
+
 # ==========================================
-# 3. データの初期化 と サイドバー（認証システム）
+# 3. データの初期化 と サイドバー
 # ==========================================
 st.set_page_config(layout="wide", page_title="アニソンカラオケ管理")
-st.title("🎤 アニソンカラオケ管理アプリ")
+st.title("🎤 アニソンカラオケ管理アプリ (Cloud DB版)")
 
-# --- 💡 認証システム ---
 with st.sidebar:
     st.write("### 🔑 管理者メニュー")
     user_pass = st.text_input("編集用パスワード", type="password")
-    
-    # パスワードが一致したらTrueになる
     is_admin = (user_pass == ADMIN_PASS)
     
     if is_admin:
@@ -105,7 +109,7 @@ with st.sidebar:
                 
             if added_count > 0 or deleted_count > 0:
                 st.session_state.df = current_df
-                current_df.to_csv(CSV_FILE_PATH, index=False)
+                save_data_to_sheets(current_df) # 🌟スプレッドシートに保存
                 msg = []
                 if added_count > 0: msg.append(f"{added_count}件追加")
                 if deleted_count > 0: msg.append(f"{deleted_count}件削除")
@@ -116,24 +120,26 @@ with st.sidebar:
     else:
         st.warning("👀 閲覧モード：編集するにはパスワードを入力してください。")
 
-# データ読み込み
+# 🌟 データの読み込み（CSVではなくスプレッドシートから取得）
 if "df" not in st.session_state:
-    if os.path.exists(CSV_FILE_PATH):
-        df = pd.read_csv(CSV_FILE_PATH)
+    try:
+        df = load_data_from_sheets()
+        # 必要な列が欠けている場合の補正
         new_cols = {"アニメ名": "", "声優": False, "キャラソン": False, "声優・ユニット名": "", "歌唱回数": 0}
         for col, default in new_cols.items():
             if col not in df.columns: df[col] = default
         df["アニメ名"] = df["アニメ名"].fillna("").astype(str)
         df["声優・ユニット名"] = df["声優・ユニット名"].fillna("").astype(str)
+        
+        # Boolean型(True/False)が文字列になってしまう現象の対策
+        for col in df.columns:
+            if "回目" in col or col in ["声優", "キャラソン"]:
+                df[col] = df[col].astype(str).str.upper().map({"TRUE": True, "FALSE": False}).fillna(False)
+        df["歌唱回数"] = df["歌唱回数"].fillna(0).astype(int)
         st.session_state.df = df
-    else:
-        st.info("初回データ構築中...")
-        df = fetch_spotify_playlist()
-        for col, val in {"アニメ名": "", "声優": False, "キャラソン": False, "声優・ユニット名": "", "1回目": False, "歌唱回数": 0}.items():
-            df[col] = val
-        st.session_state.df = df
-        df.to_csv(CSV_FILE_PATH, index=False)
-        st.rerun()
+    except Exception as e:
+        st.error(f"データベースの読み込みに失敗しました。Secretsの設定を確認してください。: {e}")
+        st.stop()
 
 df = st.session_state.df
 session_cols = get_session_columns(df)
@@ -158,7 +164,6 @@ with tab1:
     else:
         st.write(f"現在は **{display_sessions[0]} 〜 {display_sessions[-1]}** を表示中")
 
-    # 💡 管理者でなければ、表全体を編集不可(True)にする
     disable_status_t1 = ["曲名", "アーティスト", "アニメ名", "声優", "キャラソン", "歌唱回数"] if is_admin else True
 
     edited_display_df = st.data_editor(
@@ -169,18 +174,19 @@ with tab1:
     
     with top_bar_t1:
         c1, c_empty, c2 = st.columns([3, 5, 3])
-        if is_admin: # 管理者のみボタン表示
+        if is_admin:
             if c1.button("➕ 新しい回を追加"):
                 df[f"{len(session_cols)+1}回目"] = False
                 st.session_state.df = df
+                save_data_to_sheets(df) # 🌟即座にスプレッドシートへ保存
                 st.rerun()
             if c2.button("💾 記録を保存", key="save_t1", type="primary", use_container_width=True):
                 for col in display_sessions:
                     df.loc[edited_display_df.index, col] = edited_display_df[col]
                 df["歌唱回数"] = df[session_cols].sum(axis=1)
                 st.session_state.df = df
-                df.to_csv(CSV_FILE_PATH, index=False)
-                st.success("保存完了！")
+                save_data_to_sheets(df) # 🌟スプレッドシートに保存
+                st.success("スプレッドシートへ保存完了！")
                 st.rerun()
 
 # --- タブ2: アニメ・属性編集 ---
@@ -213,8 +219,8 @@ with tab2:
                 df["声優"] = edit_attr_df["声優"]
                 df["キャラソン"] = edit_attr_df["キャラソン"]
                 st.session_state.df = df
-                df.to_csv(CSV_FILE_PATH, index=False)
-                st.success("保存完了！")
+                save_data_to_sheets(df) # 🌟スプレッドシートに保存
+                st.success("スプレッドシートへ保存完了！")
                 st.rerun()
 
 # --- タブ3: アニメ別 ---
@@ -247,8 +253,8 @@ with tab4:
                 if c2.button("💾 声優情報を保存", key="save_t4", type="primary", use_container_width=True):
                     df.loc[df["声優"] == True, "声優・ユニット名"] = edit_cv_df["声優・ユニット名"].values
                     st.session_state.df = df
-                    df.to_csv(CSV_FILE_PATH, index=False)
-                    st.success("保存完了！")
+                    save_data_to_sheets(df) # 🌟スプレッドシートに保存
+                    st.success("スプレッドシートへ保存完了！")
                     st.rerun()
         
         cv_list = df[df["声優・ユニット名"].notna() & (df["声優・ユニット名"] != "")]["声優・ユニット名"].unique()
