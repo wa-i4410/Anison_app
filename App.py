@@ -2,7 +2,8 @@ import streamlit as st
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import MemoryCacheHandler, CacheFileHandler
-from streamlit_gsheets import GSheetsConnection # 🌟追加
+import gspread # 🌟バグのある部品を通さず、生のGoogle操作部品を直接使う
+from google.oauth2.service_account import Credentials # 🌟認証用の部品
 import pandas as pd
 import os
 import re
@@ -18,7 +19,7 @@ ADMIN_PASS = st.secrets["ADMIN_PASS"]
 PLAYLIST_ID = "4eMAdiJodicdywba8pZ0DU"
 
 # 🌟 Googleスプレッドシートへの接続を確立
-conn = st.connection("gsheets", type=GSheetsConnection)
+#conn = st.connection("gsheets", type=GSheetsConnection)
 
 # ==========================================
 # 2. 関数定義
@@ -62,14 +63,34 @@ def get_session_columns(df):
     return sorted(cols, key=lambda x: int(re.search(r'\d+', x).group()))
 
 # 🌟 スプレッドシートからデータを安全に読み込む関数
-def load_data_from_sheets():
-    # ttl=0 にすることでキャッシュを無効化し、常に最新のデータをスプレッドシートから取得する
-    return conn.read(worksheet="Sheet1", ttl=0)
+# 🌟 secrets.tomlのJSONを直接読み込んでGoogleと通信する安全な関数
+def get_gspread_client():
+    secret_conn = st.secrets["connections"]["gsheets"]
+    # 今書いてあるJSON文字列をプログラム内で綺麗にパースします
+    service_account_info = json.loads(secret_conn["service_account"])
+    
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
+    return gspread.authorize(creds)
 
-# 🌟 スプレッドシートへデータを保存する関数
+def load_data_from_sheets():
+    client = get_gspread_client()
+    sheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    worksheet = client.open_by_key(sheet_id).worksheet("Sheet1")
+    records = worksheet.get_all_records()
+    return pd.DataFrame(records)
+
 def save_data_to_sheets(df):
-    conn.update(worksheet="Sheet1", data=df)
-    st.cache_data.clear() # アプリ内の古いキャッシュをクリア
+    client = get_gspread_client()
+    sheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    worksheet = client.open_by_key(sheet_id).worksheet("Sheet1")
+    
+    # スプレッドシートを完全に上書き保存する処理
+    worksheet.clear()
+    df_filled = df.fillna("") # 空白がエラーにならないように補正
+    data = [df_filled.columns.values.tolist()] + df_filled.values.tolist()
+    worksheet.update(data)
+    st.cache_data.clear() # アプリ内の古い記憶をクリア
 
 # ==========================================
 # 3. データの初期化 と サイドバー
